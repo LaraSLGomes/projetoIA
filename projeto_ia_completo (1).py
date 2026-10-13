@@ -1,33 +1,10 @@
-"""
-Projeto de Inteligência Artificial Computacional — UNIFOR
-Comparação de classificadores e regressores implementados manualmente.
-
-Bibliotecas permitidas utilizadas: Python padrão e NumPy.
-Não utiliza scikit-learn nem pandas.
-
-Arquivos esperados na mesma pasta deste script:
-    phpkIxskf.arff  -> Bank Marketing (classificação)
-    dataset.arff    -> Brazilian Houses to Rent (regressão)
-
-Observação sobre desempenho:
-A validação cruzada é computacionalmente cara para kNN. Por padrão, o script
-usa uma amostra aleatória de até 4.000 linhas para classificação e 3.000 para
-regressão. Os arquivos originais continuam tendo mais de 1.000 instâncias.
-Altere os limites abaixo para avaliar mais dados, considerando o tempo de execução.
-"""
-
 import csv
 import math
 import time
 from pathlib import Path
-
 import numpy as np
 
-
-# ---------------------------------------------------------------------------
-# Configurações
-# ---------------------------------------------------------------------------
-
+# configs globais
 BASE_DIR = Path(__file__).resolve().parent
 CLASSIFICATION_FILE = BASE_DIR / "phpkIxskf.arff"
 REGRESSION_FILE = BASE_DIR / "dataset.arff"
@@ -40,25 +17,17 @@ MAX_REGRESSION_ROWS = 3000
 KNN_BATCH_SIZE = 64
 EPSILON = 1e-6
 
-
-# ---------------------------------------------------------------------------
-# Leitura de arquivos ARFF
-# ---------------------------------------------------------------------------
-
+# leitura de arquivos arff
 def split_arff_csv(line):
-    """Divide uma linha CSV de ARFF respeitando valores entre aspas simples."""
     return next(csv.reader([line], delimiter=",", quotechar="'", skipinitialspace=True))
-
 
 def clean_value(value):
     return str(value).strip().strip("'").strip('"').strip()
 
-
 def parse_arff(file_path):
-    """Lê atributos e linhas de um arquivo ARFF sem bibliotecas externas."""
-    attributes = []
+    atributos = []
     attribute_types = []
-    rows = []
+    linhas = []
     in_data = False
 
     with open(file_path, "r", encoding="utf-8", errors="replace") as arff:
@@ -72,7 +41,6 @@ def parse_arff(file_path):
                 continue
 
             if lower.startswith("@attribute"):
-                # Divide em até três partes para preservar nomes/definições.
                 parts = line.split(None, 2)
                 if len(parts) < 3:
                     continue
@@ -85,7 +53,7 @@ def parse_arff(file_path):
                     attribute_types.append(("nominal", nominal_values))
                 else:
                     attribute_types.append(("numeric", None))
-                attributes.append(name)
+                atributos.append(name)
                 continue
 
             if lower == "@data":
@@ -97,44 +65,37 @@ def parse_arff(file_path):
                     values = [clean_value(v) for v in split_arff_csv(line)]
                 except (csv.Error, StopIteration):
                     continue
-                if len(values) == len(attributes):
-                    rows.append(values)
+                if len(values) == len(atributos):
+                    linhas.append(values)
 
-    if not attributes or not rows:
+    if not atributos or not linhas:
         raise ValueError(f"Arquivo ARFF vazio ou inválido: {file_path}")
 
-    return attributes, attribute_types, rows
-
+    return atributos, attribute_types, linhas
 
 def encode_dataset(file_path, max_rows=None, seed=RANDOM_SEED, drop_features=None):
-    """
-    Converte os atributos preditores para números.
-    Variáveis nominais são codificadas em one-hot (sem impor ordem artificial).
-    Valores ausentes '?' são imputados pela média (numéricos) ou moda (nominais).
-    A última coluna é a variável-alvo.
-    """
-    names, types, rows = parse_arff(file_path)
+    nomes, types, linhas = parse_arff(file_path)
     rng = np.random.default_rng(seed)
 
-    if max_rows is not None and len(rows) > max_rows:
-        selected = rng.choice(len(rows), size=max_rows, replace=False)
+    if max_rows is not None and len(linhas) > max_rows:
+        selected = rng.choice(len(linhas), size=max_rows, replace=False)
         selected.sort()
-        rows = [rows[i] for i in selected]
+        linhas = [linhas[i] for i in selected]
 
-    target_name = names[-1]
+    target_name = nomes[-1]
     target_type, target_nominal = types[-1]
     drop_features = set(drop_features or [])
-    feature_indices = [j for j, name in enumerate(names[:-1]) if name not in drop_features]
-    feature_names = [names[j] for j in feature_indices]
+    feature_indices = [j for j, name in enumerate(nomes[:-1]) if name not in drop_features]
+    atributos = [nomes[j] for j in feature_indices]
     feature_types = [types[j] for j in feature_indices]
 
-    raw_X = [[row[j] for j in feature_indices] for row in rows]
-    raw_y = [row[-1] for row in rows]
+    raw_X = [[row[j] for j in feature_indices] for row in linhas]
+    raw_y = [row[-1] for row in linhas]
 
     encoded_columns = []
-    expanded_feature_names = []
+    expanded_atributos = []
 
-    for j, (feature_name, (kind, categories)) in enumerate(zip(feature_names, feature_types)):
+    for j, (feature_name, (kind, categories)) in enumerate(zip(atributos, feature_types)):
         column = [clean_value(row[j]) for row in raw_X]
         missing = [value == "?" or value == "" for value in column]
 
@@ -147,7 +108,6 @@ def encode_dataset(file_path, max_rows=None, seed=RANDOM_SEED, drop_features=Non
             if not category_list:
                 category_list = ["unknown"]
 
-            # Imputação pela moda para categorias ausentes.
             if valid:
                 values, counts = np.unique(np.asarray(valid, dtype=str), return_counts=True)
                 mode_value = values[np.argmax(counts)]
@@ -157,7 +117,7 @@ def encode_dataset(file_path, max_rows=None, seed=RANDOM_SEED, drop_features=Non
             column = [mode_value if miss else v for v, miss in zip(column, missing)]
             for category in category_list:
                 encoded_columns.append(np.asarray([1.0 if v == category else 0.0 for v in column]))
-                expanded_feature_names.append(f"{feature_name}={category}")
+                expanded_atributos.append(f"{feature_name}={category}")
         else:
             numeric = []
             for value in column:
@@ -170,7 +130,7 @@ def encode_dataset(file_path, max_rows=None, seed=RANDOM_SEED, drop_features=Non
             fill_value = float(np.mean(finite)) if len(finite) else 0.0
             numeric[~np.isfinite(numeric)] = fill_value
             encoded_columns.append(numeric)
-            expanded_feature_names.append(feature_name)
+            expanded_atributos.append(feature_name)
 
     X = np.column_stack(encoded_columns).astype(float)
 
@@ -184,33 +144,26 @@ def encode_dataset(file_path, max_rows=None, seed=RANDOM_SEED, drop_features=Non
         try:
             y = np.asarray([float(value) for value in raw_y], dtype=float)
         except ValueError as exc:
-            raise ValueError(f"A variável-alvo {target_name} não é numérica.") from exc
+            raise ValueError(f"erro var alvo {target_name}") from exc
         task = "regression"
         target_classes = None
 
-    # Escalonamento feito dentro de cada fold, sem usar dados de teste.
-    return X, y, target_name, expanded_feature_names, task, target_classes, len(names), len(parse_arff(file_path)[2])
+    return X, y, target_name, expanded_atributos, task, target_classes, len(nomes), len(parse_arff(file_path)[2])
 
 
-# ---------------------------------------------------------------------------
-# Pré-processamento e validação cruzada
-# ---------------------------------------------------------------------------
-
+# validacao cruzada
 def standardize_train_test(X_train, X_test):
     mean = np.mean(X_train, axis=0)
     std = np.std(X_train, axis=0)
     std[std < EPSILON] = 1.0
     return (X_train - mean) / std, (X_test - mean) / std
 
-
 def make_folds(n_samples, n_folds=N_FOLDS, seed=RANDOM_SEED):
-    """Gera índices de validação cruzada k-fold embaralhados manualmente."""
     if n_samples < n_folds:
-        raise ValueError("O número de amostras deve ser maior ou igual ao número de folds.")
+        raise ValueError("erro: n_samples menor q folds")
     rng = np.random.default_rng(seed)
     indices = rng.permutation(n_samples)
     return [fold for fold in np.array_split(indices, n_folds)]
-
 
 def cross_validation_splits(n_samples, n_folds=N_FOLDS, seed=RANDOM_SEED):
     folds = make_folds(n_samples, n_folds, seed)
@@ -220,13 +173,8 @@ def cross_validation_splits(n_samples, n_folds=N_FOLDS, seed=RANDOM_SEED):
         mask[test_indices] = False
         yield all_indices[mask], test_indices
 
-
-# ---------------------------------------------------------------------------
-# Métricas de classificação
-# ---------------------------------------------------------------------------
-
+# metricas classificacao
 def confusion_matrix_binary(y_true, y_pred, positive_label=1):
-    """Matriz 2x2 na ordem [[VN, FP], [FN, VP]], para rótulos binários."""
     y_true = np.asarray(y_true)
     y_pred = np.asarray(y_pred)
     negative_label = 0 if positive_label != 0 else 1
@@ -236,7 +184,6 @@ def confusion_matrix_binary(y_true, y_pred, positive_label=1):
     fn = int(np.sum((y_true == positive_label) & (y_pred == negative_label)))
     vp = int(np.sum((y_true == positive_label) & (y_pred == positive_label)))
     return np.array([[vn, fp], [fn, vp]], dtype=int)
-
 
 def classification_metrics(y_true, y_pred, positive_label=1):
     cm = confusion_matrix_binary(y_true, y_pred, positive_label)
@@ -256,11 +203,7 @@ def classification_metrics(y_true, y_pred, positive_label=1):
         "Matriz de confusão": cm,
     }
 
-
-# ---------------------------------------------------------------------------
-# Métricas de regressão
-# ---------------------------------------------------------------------------
-
+# metricas regressao
 def regression_metrics(y_true, y_pred, n_features):
     y_true = np.asarray(y_true, dtype=float)
     y_pred = np.asarray(y_pred, dtype=float)
@@ -285,17 +228,9 @@ def regression_metrics(y_true, y_pred, n_features):
         "RMSE": rmse,
     }
 
-
-# ---------------------------------------------------------------------------
-# kNN — classificação e regressão
-# ---------------------------------------------------------------------------
-
+# algoritmos
 class KNN:
     def __init__(self, k=5, task="classification", distance="euclidean"):
-        if task not in ("classification", "regression"):
-            raise ValueError("task deve ser 'classification' ou 'regression'.")
-        if distance not in ("euclidean", "manhattan"):
-            raise ValueError("distance deve ser 'euclidean' ou 'manhattan'.")
         self.k = k
         self.task = task
         self.distance = distance
@@ -308,379 +243,4 @@ class KNN:
         return self
 
     def _distances(self, X_batch):
-        # X_batch: (n_lote, n_atributos); X_train: (n_treino, n_atributos)
-        if self.distance == "euclidean":
-            # Identidade: ||a-b||² = ||a||² + ||b||² - 2a.b
-            batch_sq = np.sum(X_batch ** 2, axis=1, keepdims=True)
-            train_sq = np.sum(self.X_train ** 2, axis=1)[None, :]
-            squared = batch_sq + train_sq - 2.0 * (X_batch @ self.X_train.T)
-            np.maximum(squared, 0.0, out=squared)
-            return np.sqrt(squared)
-
-        # Manhattan, acumulada atributo a atributo para limitar a memória usada.
-        distances = np.zeros((len(X_batch), len(self.X_train)), dtype=float)
-        for j in range(self.X_train.shape[1]):
-            distances += np.abs(X_batch[:, j, None] - self.X_train[None, :, j])
-        return distances
-
-    def predict(self, X_test):
-        X_test = np.asarray(X_test, dtype=float)
-        predictions = []
-        k = min(self.k, len(self.X_train))
-
-        for start in range(0, len(X_test), KNN_BATCH_SIZE):
-            batch = X_test[start:start + KNN_BATCH_SIZE]
-            distances = self._distances(batch)
-            nearest_indices = np.argpartition(distances, kth=k - 1, axis=1)[:, :k]
-
-            for row_index, neighbors in enumerate(nearest_indices):
-                labels = self.y_train[neighbors]
-                if self.task == "classification":
-                    values, counts = np.unique(labels, return_counts=True)
-                    predictions.append(values[np.argmax(counts)])
-                else:
-                    predictions.append(float(np.mean(labels)))
-
-        dtype = int if self.task == "classification" else float
-        return np.asarray(predictions, dtype=dtype)
-
-
-# ---------------------------------------------------------------------------
-# Regressão Linear Múltipla — solução por pseudoinversa
-# ---------------------------------------------------------------------------
-
-class MultipleLinearRegression:
-    def __init__(self):
-        self.coefficients = None
-
-    def fit(self, X_train, y_train):
-        X_train = np.asarray(X_train, dtype=float)
-        y_train = np.asarray(y_train, dtype=float)
-        design = np.column_stack((np.ones(len(X_train)), X_train))
-        self.coefficients = np.linalg.pinv(design) @ y_train
-        return self
-
-    def predict(self, X_test):
-        X_test = np.asarray(X_test, dtype=float)
-        design = np.column_stack((np.ones(len(X_test)), X_test))
-        return design @ self.coefficients
-
-
-# ---------------------------------------------------------------------------
-# Classificador Bayesiano Gaussiano univariado (Naive Bayes)
-# ---------------------------------------------------------------------------
-
-class NaiveBayes:
-    """
-    Naive Bayes Gaussiano univariado, seguindo a lógica do arquivo nb_gaussiano.py:
-    calcula, para cada classe, média, variância e probabilidade a priori.
-    Na predição, combina as densidades normais de cada atributo usando logaritmos.
-    """
-
-    def __init__(self, variance_smoothing=1e-6):
-        self.variance_smoothing = variance_smoothing
-        self._classes = None
-        self._mean = None
-        self._var = None
-        self._prior = None
-
-    def fit(self, X_train, y_train):
-        X_train = np.asarray(X_train, dtype=np.float64)
-        y_train = np.asarray(y_train)
-        n_samples, n_features = X_train.shape
-
-        self._classes = np.unique(y_train)
-        n_classes = len(self._classes)
-        self._mean = np.zeros((n_classes, n_features), dtype=np.float64)
-        self._var = np.zeros((n_classes, n_features), dtype=np.float64)
-        self._prior = np.zeros(n_classes, dtype=np.float64)
-
-        for idx, c in enumerate(self._classes):
-            X_c = X_train[y_train == c]
-            self._mean[idx, :] = X_c.mean(axis=0)
-            self._var[idx, :] = X_c.var(axis=0)
-            self._prior[idx] = X_c.shape[0] / float(n_samples)
-
-        # Evita variância zero, que causaria divisão por zero na distribuição normal.
-        global_var = np.var(X_train, axis=0)
-        floor = self.variance_smoothing * np.maximum(global_var, 1.0)
-        self._var = np.maximum(self._var, floor)
-        return self
-
-    def predict(self, X_test):
-        X_test = np.asarray(X_test, dtype=np.float64)
-        log_posteriors = []
-
-        for idx, _ in enumerate(self._classes):
-            variance = np.maximum(self._var[idx], EPSILON)
-            difference = X_test - self._mean[idx]
-
-            # Densidade normal univariada por atributo:
-            # p(x_j|C) = 1/sqrt(2*pi*var) * exp(-(x_j-mu)^2/(2*var))
-            # Naive Bayes assume independência condicional entre os atributos.
-            log_density = -0.5 * np.sum(
-                np.log(2.0 * np.pi * variance)
-                + (difference ** 2) / variance,
-                axis=1,
-            )
-            log_prior = np.log(max(self._prior[idx], EPSILON))
-            log_posteriors.append(log_prior + log_density)
-
-        best_indices = np.argmax(np.column_stack(log_posteriors), axis=1)
-        return self._classes[best_indices]
-
-
-# ---------------------------------------------------------------------------
-# Classificador Bayesiano Gaussiano multivariado
-# ---------------------------------------------------------------------------
-
-class GaussianMultivariateBayes:
-    def __init__(self, regularization=1e-4):
-        self.regularization = regularization
-
-    def fit(self, X_train, y_train):
-        self.classes = np.unique(y_train)
-        self.log_priors = {}
-        self.means = {}
-        self.inv_covariances = {}
-        self.log_determinants = {}
-        n_features = X_train.shape[1]
-        identity = np.eye(n_features)
-
-        for cls in self.classes:
-            X_cls = X_train[y_train == cls]
-            self.log_priors[cls] = np.log(len(X_cls) / len(y_train))
-            mean = np.mean(X_cls, axis=0)
-            self.means[cls] = mean
-
-            if len(X_cls) > 1:
-                covariance = np.cov(X_cls, rowvar=False)
-            else:
-                covariance = identity.copy()
-            covariance = np.atleast_2d(covariance)
-            # Regularização para evitar matriz singular.
-            scale = max(float(np.trace(covariance) / max(n_features, 1)), 1.0)
-            covariance = covariance + identity * self.regularization * scale
-
-            sign, logdet = np.linalg.slogdet(covariance)
-            if sign <= 0 or not np.isfinite(logdet):
-                covariance = covariance + identity * (self.regularization * 10.0 + EPSILON)
-                sign, logdet = np.linalg.slogdet(covariance)
-
-            self.inv_covariances[cls] = np.linalg.pinv(covariance)
-            self.log_determinants[cls] = float(logdet)
-        return self
-
-    def predict(self, X_test):
-        log_probabilities = []
-        n_features = X_test.shape[1]
-
-        for cls in self.classes:
-            diff = X_test - self.means[cls]
-            mahalanobis = np.einsum(
-                "bi,ij,bj->b", diff, self.inv_covariances[cls], diff
-            )
-            log_density = -0.5 * (
-                n_features * np.log(2.0 * np.pi)
-                + self.log_determinants[cls]
-                + mahalanobis
-            )
-            log_probabilities.append(self.log_priors[cls] + log_density)
-
-        return self.classes[np.argmax(np.column_stack(log_probabilities), axis=1)]
-
-
-# ---------------------------------------------------------------------------
-# Execução e agregação dos experimentos
-# ---------------------------------------------------------------------------
-
-def summarize_results(model_name, fold_results, task):
-    keys = [key for key in fold_results[0] if key != "Matriz de confusão"]
-    summary = {"Algoritmo": model_name}
-
-    for key in keys:
-        values = np.asarray([result[key] for result in fold_results], dtype=float)
-        summary[key] = (float(np.nanmean(values)), float(np.nanstd(values, ddof=1)))
-
-    train_times = np.asarray([r["Tempo treino (s)"] for r in fold_results])
-    test_times = np.asarray([r["Tempo teste (s)"] for r in fold_results])
-    summary["Tempo treino (s)"] = (float(np.mean(train_times)), float(np.std(train_times, ddof=1)))
-    summary["Tempo teste (s)"] = (float(np.mean(test_times)), float(np.std(test_times, ddof=1)))
-    summary["Matriz de confusão"] = fold_results[-1].get("Matriz de confusão")
-    return summary
-
-
-def evaluate_model_cv(model_name, model_factory, X, y, task, n_folds=N_FOLDS, seed=RANDOM_SEED):
-    fold_results = []
-
-    for fold_number, (train_idx, test_idx) in enumerate(
-        cross_validation_splits(len(X), n_folds=n_folds, seed=seed), start=1
-    ):
-        X_train, X_test = X[train_idx], X[test_idx]
-        y_train, y_test = y[train_idx], y[test_idx]
-
-        # Escala estimada apenas no conjunto de treino para evitar vazamento.
-        X_train_scaled, X_test_scaled = standardize_train_test(X_train, X_test)
-
-        model = model_factory()
-        start = time.perf_counter()
-        model.fit(X_train_scaled, y_train)
-        train_seconds = time.perf_counter() - start
-
-        start = time.perf_counter()
-        y_pred = model.predict(X_test_scaled)
-        test_seconds = time.perf_counter() - start
-
-        if task == "classification":
-            metrics = classification_metrics(y_test, y_pred, positive_label=1)
-        else:
-            metrics = regression_metrics(y_test, y_pred, n_features=X_train.shape[1])
-
-        metrics["Tempo treino (s)"] = train_seconds
-        metrics["Tempo teste (s)"] = test_seconds
-        fold_results.append(metrics)
-
-        if task == "classification":
-            print(
-                f"  Fold {fold_number}/{n_folds}: "
-                f"acurácia={metrics['Acurácia']:.4f}, "
-                f"F1={metrics['F1-score']:.4f}, "
-                f"treino={train_seconds:.3f}s, teste={test_seconds:.3f}s"
-            )
-        else:
-            print(
-                f"  Fold {fold_number}/{n_folds}: "
-                f"R²={metrics['R²']:.4f}, MAE={metrics['MAE']:.2f}, "
-                f"treino={train_seconds:.3f}s, teste={test_seconds:.3f}s"
-            )
-
-    return summarize_results(model_name, fold_results, task)
-
-
-def print_summary_table(summaries, task):
-    if task == "classification":
-        columns = ["Acurácia", "Precisão", "Recall", "F1-score", "Tempo treino (s)", "Tempo teste (s)"]
-    else:
-        columns = ["R²", "R² ajustado", "MAE", "RMSE", "Tempo treino (s)", "Tempo teste (s)"]
-
-    print("\n" + "=" * 112)
-    print("TABELA COMPARATIVA — média ± desvio padrão dos folds")
-    print("=" * 112)
-    header = f"{'Algoritmo':38s}" + "".join(f"{col:>22s}" for col in columns)
-    print(header)
-    print("-" * len(header))
-
-    for summary in summaries:
-        line = f"{summary['Algoritmo'][:37]:38s}"
-        for col in columns:
-            mean, std = summary[col]
-            if col.endswith("(s)"):
-                value = f"{mean:.4f} ± {std:.4f}"
-            elif col in ("MAE", "RMSE"):
-                value = f"{mean:.2f} ± {std:.2f}"
-            else:
-                value = f"{mean:.4f} ± {std:.4f}"
-            line += f"{value:>22s}"
-        print(line)
-
-
-def save_summary_csv(summaries, task, output_path):
-    """Salva uma tabela CSV com médias e desvios, usando apenas a biblioteca padrão."""
-    if task == "classification":
-        columns = ["Acurácia", "Precisão", "Recall", "F1-score", "Tempo treino (s)", "Tempo teste (s)"]
-    else:
-        columns = ["R²", "R² ajustado", "MAE", "RMSE", "Tempo treino (s)", "Tempo teste (s)"]
-
-    with open(output_path, "w", newline="", encoding="utf-8-sig") as file:
-        writer = csv.writer(file, delimiter=";")
-        writer.writerow(["Algoritmo"] + [f"{c} média" for c in columns] + [f"{c} desvio padrão" for c in columns])
-        for summary in summaries:
-            means = [summary[c][0] for c in columns]
-            stds = [summary[c][1] for c in columns]
-            writer.writerow([summary["Algoritmo"]] + means + stds)
-
-
-def run_classification_experiment():
-    print("\n\n### EXPERIMENTO 1 — CLASSIFICAÇÃO: BANK MARKETING ###")
-    if not CLASSIFICATION_FILE.exists():
-        raise FileNotFoundError(f"Não encontrei {CLASSIFICATION_FILE.name} na pasta do script.")
-
-    X, y, target, feature_names, task, classes, total_attributes, original_rows = encode_dataset(
-        CLASSIFICATION_FILE, MAX_CLASSIFICATION_ROWS
-    )
-    print(f"Arquivo: {CLASSIFICATION_FILE.name}")
-    print(f"Instâncias no arquivo: {original_rows}")
-    print(f"Amostras usadas na validação: {len(X)}")
-    print(f"Atributos no ARFF (incluindo alvo): {total_attributes}")
-    print(f"Variável-alvo: {target}; classes codificadas: {classes}")
-    print(f"Dimensões após one-hot: {X.shape[1]}")
-    print(f"Distribuição das classes na amostra: {dict(zip(*np.unique(y, return_counts=True)))}")
-    print(f"Validação cruzada: {N_FOLDS}-fold")
-
-    # A classe "2" é a segunda categoria no ARFF e será tratada como positiva.
-    models = [
-        ("kNN — Euclidiana", lambda: KNN(K_NEIGHBORS, "classification", "euclidean")),
-        ("kNN — Manhattan", lambda: KNN(K_NEIGHBORS, "classification", "manhattan")),
-        ("Bayesiano Gaussiano Univariado", lambda: NaiveBayes()),
-        ("Bayesiano Gaussiano Multivariado", lambda: GaussianMultivariateBayes()),
-    ]
-
-    summaries = []
-    for name, factory in models:
-        print(f"\nModelo: {name}")
-        summaries.append(evaluate_model_cv(name, factory, X, y, "classification"))
-
-    print_summary_table(summaries, "classification")
-    save_summary_csv(summaries, "classification", BASE_DIR / "resultados_classificacao.csv")
-    print("\nMatrizes de confusão do último fold:")
-    for summary in summaries:
-        print(f"\n{summary['Algoritmo']}:\n{summary['Matriz de confusão']}")
-    print("\nTabela salva em resultados_classificacao.csv")
-
-
-def run_regression_experiment():
-    print("\n\n### EXPERIMENTO 2 — REGRESSÃO: BRAZILIAN HOUSES TO RENT ###")
-    if not REGRESSION_FILE.exists():
-        raise FileNotFoundError(f"Não encontrei {REGRESSION_FILE.name} na pasta do script.")
-
-    X, y, target, feature_names, task, classes, total_attributes, original_rows = encode_dataset(
-        REGRESSION_FILE,
-        MAX_REGRESSION_ROWS,
-        drop_features={"hoa_(BRL)", "rent_amount_(BRL)", "property_tax_(BRL)", "fire_insurance_(BRL)"},
-    )
-    print(f"Arquivo: {REGRESSION_FILE.name}")
-    print(f"Instâncias no arquivo: {original_rows}")
-    print(f"Amostras usadas na validação: {len(X)}")
-    print(f"Atributos no ARFF (incluindo alvo): {total_attributes}")
-    print(f"Variável-alvo: {target}")
-    print(f"Dimensões após one-hot: {X.shape[1]}")
-    print("Nota: atributos que compõem diretamente o total (condomínio, aluguel, IPTU e seguro) foram excluídos para evitar vazamento do alvo.")
-    print(f"Validação cruzada: {N_FOLDS}-fold")
-
-    models = [
-        ("kNN Regressão — Euclidiana", lambda: KNN(K_NEIGHBORS, "regression", "euclidean")),
-        ("kNN Regressão — Manhattan", lambda: KNN(K_NEIGHBORS, "regression", "manhattan")),
-        ("Regressão Linear Múltipla", lambda: MultipleLinearRegression()),
-    ]
-
-    summaries = []
-    for name, factory in models:
-        print(f"\nModelo: {name}")
-        summaries.append(evaluate_model_cv(name, factory, X, y, "regression"))
-
-    print_summary_table(summaries, "regression")
-    save_summary_csv(summaries, "regression", BASE_DIR / "resultados_regressao.csv")
-    print("\nTabela salva em resultados_regressao.csv")
-
-
-def main():
-    print("PROJETO DE INTELIGÊNCIA ARTIFICIAL COMPUTACIONAL — UNIFOR")
-    print("Algoritmos implementados manualmente com NumPy; sem scikit-learn/pandas.")
-    run_classification_experiment()
-    run_regression_experiment()
-    print("\nExperimentos concluídos.")
-    print("Use as tabelas geradas para discutir desempenho, tempo e limitações nos slides.")
-
-
-if __name__ == "__main__":
-    main()
+        if self.
