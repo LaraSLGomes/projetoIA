@@ -243,4 +243,296 @@ class KNN:
         return self
 
     def _distances(self, X_batch):
-        if self.
+        if self.distance == "euclidean":
+            batch_sq = np.sum(X_batch ** 2, axis=1, keepdims=True)
+            train_sq = np.sum(self.X_train ** 2, axis=1)[None, :]
+            squared = batch_sq + train_sq - 2.0 * (X_batch @ self.X_train.T)
+            np.maximum(squared, 0.0, out=squared)
+            return np.sqrt(squared)
+
+        # dist manhattan acumulada por atributo p poupar memoria
+        distances = np.zeros((len(X_batch), len(self.X_train)), dtype=float)
+        for j in range(self.X_train.shape[1]):
+            distances += np.abs(X_batch[:, j, None] - self.X_train[None, :, j])
+        return distances
+
+    def predict(self, X_test):
+        X_test = np.asarray(X_test, dtype=float)
+        predictions = []
+        k = min(self.k, len(self.X_train))
+
+        for start in range(0, len(X_test), KNN_BATCH_SIZE):
+            batch = X_test[start:start + KNN_BATCH_SIZE]
+            distances = self._distances(batch)
+            nearest_indices = np.argpartition(distances, kth=k - 1, axis=1)[:, :k]
+
+            for row_index, neighbors in enumerate(nearest_indices):
+                labels = self.y_train[neighbors]
+                if self.task == "classification":
+                    values, counts = np.unique(labels, return_counts=True)
+                    predictions.append(values[np.argmax(counts)])
+                else:
+                    predictions.append(float(np.mean(labels)))
+
+        dtype = int if self.task == "classification" else float
+        return np.asarray(predictions, dtype=dtype)
+
+
+class MultipleLinearRegression:
+    def __init__(self):
+        self.coefficients = None
+
+    def fit(self, X_train, y_train):
+        X_train = np.asarray(X_train, dtype=float)
+        y_train = np.asarray(y_train, dtype=float)
+        design = np.column_stack((np.ones(len(X_train)), X_train))
+        # pinv p evitar problema de matriz singular
+        self.coefficients = np.linalg.pinv(design) @ y_train
+        return self
+
+    def predict(self, X_test):
+        X_test = np.asarray(X_test, dtype=float)
+        design = np.column_stack((np.ones(len(X_test)), X_test))
+        return design @ self.coefficients
+
+
+class NaiveBayes:
+    def __init__(self, variance_smoothing=1e-6):
+        self.variance_smoothing = variance_smoothing
+        self._classes = None
+        self._mean = None
+        self._var = None
+        self._prior = None
+
+    def fit(self, X_train, y_train):
+        X_train = np.asarray(X_train, dtype=np.float64)
+        y_train = np.asarray(y_train)
+        n_samples, n_features = X_train.shape
+
+        self._classes = np.unique(y_train)
+        n_classes = len(self._classes)
+        self._mean = np.zeros((n_classes, n_features), dtype=np.float64)
+        self._var = np.zeros((n_classes, n_features), dtype=np.float64)
+        self._prior = np.zeros(n_classes, dtype=np.float64)
+
+        for idx, c in enumerate(self._classes):
+            X_c = X_train[y_train == c]
+            self._mean[idx, :] = X_c.mean(axis=0)
+            self._var[idx, :] = X_c.var(axis=0)
+            self._prior[idx] = X_c.shape[0] / float(n_samples)
+
+        global_var = np.var(X_train, axis=0)
+        floor = self.variance_smoothing * np.maximum(global_var, 1.0)
+        self._var = np.maximum(self._var, floor)
+        return self
+
+    def predict(self, X_test):
+        X_test = np.asarray(X_test, dtype=np.float64)
+        log_posteriors = []
+
+        for idx, _ in enumerate(self._classes):
+            variance = np.maximum(self._var[idx], EPSILON)
+            difference = X_test - self._mean[idx]
+
+            log_density = -0.5 * np.sum(
+                np.log(2.0 * np.pi * variance) + (difference ** 2) / variance,
+                axis=1,
+            )
+            log_prior = np.log(max(self._prior[idx], EPSILON))
+            log_posteriors.append(log_prior + log_density)
+
+        best_indices = np.argmax(np.column_stack(log_posteriors), axis=1)
+        return self._classes[best_indices]
+
+
+class GaussianMultivariateBayes:
+    def __init__(self, regularization=1e-4):
+        self.regularization = regularization
+
+    def fit(self, X_train, y_train):
+        self.classes = np.unique(y_train)
+        self.log_priors = {}
+        self.means = {}
+        self.inv_covariances = {}
+        self.log_determinants = {}
+        n_features = X_train.shape[1]
+        identity = np.eye(n_features)
+
+        for cls in self.classes:
+            X_cls = X_train[y_train == cls]
+            self.log_priors[cls] = np.log(len(X_cls) / len(y_train))
+            mean = np.mean(X_cls, axis=0)
+            self.means[cls] = mean
+
+            if len(X_cls) > 1:
+                covariance = np.cov(X_cls, rowvar=False)
+            else:
+                covariance = identity.copy()
+            covariance = np.atleast_2d(covariance)
+            
+            scale = max(float(np.trace(covariance) / max(n_features, 1)), 1.0)
+            covariance = covariance + identity * self.regularization * scale
+
+            sign, logdet = np.linalg.slogdet(covariance)
+            if sign <= 0 or not np.isfinite(logdet):
+                covariance = covariance + identity * (self.regularization * 10.0 + EPSILON)
+                sign, logdet = np.linalg.slogdet(covariance)
+
+            self.inv_covariances[cls] = np.linalg.pinv(covariance)
+            self.log_determinants[cls] = float(logdet)
+        return self
+
+    def predict(self, X_test):
+        log_probabilities = []
+        n_features = X_test.shape[1]
+
+        for cls in self.classes:
+            diff = X_test - self.means[cls]
+            mahalanobis = np.einsum("bi,ij,bj->b", diff, self.inv_covariances[cls], diff)
+            log_density = -0.5 * (
+                n_features * np.log(2.0 * np.pi)
+                + self.log_determinants[cls]
+                + mahalanobis
+            )
+            log_probabilities.append(self.log_priors[cls] + log_density)
+
+        return self.classes[np.argmax(np.column_stack(log_probabilities), axis=1)]
+
+
+# main loops
+def summarize_results(model_name, resultados_fold, task):
+    keys = [key for key in resultados_fold[0] if key != "Matriz de confusão"]
+    resumo = {"Algoritmo": model_name}
+
+    for key in keys:
+        values = np.asarray([r[key] for r in resultados_fold], dtype=float)
+        resumo[key] = (float(np.nanmean(values)), float(np.nanstd(values, ddof=1)))
+
+    train_times = np.asarray([r["Tempo treino (s)"] for r in resultados_fold])
+    test_times = np.asarray([r["Tempo teste (s)"] for r in resultados_fold])
+    resumo["Tempo treino (s)"] = (float(np.mean(train_times)), float(np.std(train_times, ddof=1)))
+    resumo["Tempo teste (s)"] = (float(np.mean(test_times)), float(np.std(test_times, ddof=1)))
+    resumo["Matriz de confusão"] = resultados_fold[-1].get("Matriz de confusão")
+    return resumo
+
+
+def evaluate_model_cv(model_name, model_factory, X, y, task, n_folds=N_FOLDS, seed=RANDOM_SEED):
+    resultados_fold = []
+
+    for fold_number, (train_idx, test_idx) in enumerate(
+        cross_validation_splits(len(X), n_folds=n_folds, seed=seed), start=1
+    ):
+        X_train, X_test = X[train_idx], X[test_idx]
+        y_train, y_test = y[train_idx], y[test_idx]
+
+        X_train_scaled, X_test_scaled = standardize_train_test(X_train, X_test)
+        
+        # print("iniciando fit do fold", fold_number)
+
+        model = model_factory()
+        start = time.perf_counter()
+        model.fit(X_train_scaled, y_train)
+        train_seconds = time.perf_counter() - start
+
+        start = time.perf_counter()
+        y_pred = model.predict(X_test_scaled)
+        test_seconds = time.perf_counter() - start
+
+        if task == "classification":
+            metrics = classification_metrics(y_test, y_pred, positive_label=1)
+        else:
+            metrics = regression_metrics(y_test, y_pred, n_features=X_train.shape[1])
+
+        metrics["Tempo treino (s)"] = train_seconds
+        metrics["Tempo teste (s)"] = test_seconds
+        resultados_fold.append(metrics)
+
+        if task == "classification":
+            print(f"  Fold {fold_number}: acc={metrics['Acurácia']:.4f}, f1={metrics['F1-score']:.4f}")
+        else:
+            print(f"  Fold {fold_number}: r2={metrics['R²']:.4f}, mae={metrics['MAE']:.2f}")
+
+    return summarize_results(model_name, resultados_fold, task)
+
+
+def print_summary_table(resumos, task):
+    print("\n--- Resultados ---")
+    for resumo in resumos:
+        print(f"\nModelo: {resumo['Algoritmo']}")
+        for k, v in resumo.items():
+            if k not in ["Algoritmo", "Matriz de confusão"]:
+                print(f"  {k}: {v[0]:.4f} (+- {v[1]:.4f})")
+
+
+def save_summary_csv(resumos, task, output_path):
+    if task == "classification":
+        columns = ["Acurácia", "Precisão", "Recall", "F1-score", "Tempo treino (s)", "Tempo teste (s)"]
+    else:
+        columns = ["R²", "R² ajustado", "MAE", "RMSE", "Tempo treino (s)", "Tempo teste (s)"]
+
+    with open(output_path, "w", newline="", encoding="utf-8-sig") as file:
+        writer = csv.writer(file, delimiter=";")
+        writer.writerow(["Algoritmo"] + [f"{c} media" for c in columns] + [f"{c} std" for c in columns])
+        for resumo in resumos:
+            means = [resumo[c][0] for c in columns]
+            stds = [resumo[c][1] for c in columns]
+            writer.writerow([resumo["Algoritmo"]] + means + stds)
+
+
+def run_classification_experiment():
+    print("\nExp 1: Bank Marketing")
+    if not CLASSIFICATION_FILE.exists():
+        print("arquivo n encontrado")
+        return
+
+    X, y, target, atributos, task, target_classes, total_attributes, original_rows = encode_dataset(
+        CLASSIFICATION_FILE, MAX_CLASSIFICATION_ROWS
+    )
+    # print("dimensoes X:", X.shape)
+    
+    models = [
+        ("kNN (Euclidiana)", lambda: KNN(K_NEIGHBORS, "classification", "euclidean")),
+        ("kNN (Manhattan)", lambda: KNN(K_NEIGHBORS, "classification", "manhattan")),
+        ("NB Univariado", lambda: NaiveBayes()),
+        ("NB Multivariado", lambda: GaussianMultivariateBayes()),
+    ]
+
+    resumos = []
+    for name, factory in models:
+        print(f"\nTreinando {name}...")
+        resumos.append(evaluate_model_cv(name, factory, X, y, "classification"))
+
+    print_summary_table(resumos, "classification")
+    save_summary_csv(resumos, "classification", BASE_DIR / "resultados_classificacao.csv")
+
+
+def run_regression_experiment():
+    print("\nExp 2: Brazilian Houses")
+    if not REGRESSION_FILE.exists():
+        print("arquivo n encontrado")
+        return
+
+    X, y, target, atributos, task, target_classes, total_attributes, original_rows = encode_dataset(
+        REGRESSION_FILE,
+        MAX_REGRESSION_ROWS,
+        drop_features={"hoa_(BRL)", "rent_amount_(BRL)", "property_tax_(BRL)", "fire_insurance_(BRL)"},
+    )
+
+    models = [
+        ("kNN Reg (Euclidiana)", lambda: KNN(K_NEIGHBORS, "regression", "euclidean")),
+        ("kNN Reg (Manhattan)", lambda: KNN(K_NEIGHBORS, "regression", "manhattan")),
+        ("Reg Linear", lambda: MultipleLinearRegression()),
+    ]
+
+    resumos = []
+    for name, factory in models:
+        print(f"\nTreinando {name}...")
+        resumos.append(evaluate_model_cv(name, factory, X, y, "regression"))
+
+    print_summary_table(resumos, "regression")
+    save_summary_csv(resumos, "regression", BASE_DIR / "resultados_regressao.csv")
+
+
+if __name__ == "__main__":
+    run_classification_experiment()
+    run_regression_experiment()
