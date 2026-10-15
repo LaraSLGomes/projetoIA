@@ -1,21 +1,3 @@
-"""
-Projeto de Inteligência Artificial Computacional — UNIFOR
-Comparação de classificadores e regressores implementados manualmente.
-
-Bibliotecas permitidas utilizadas: Python padrão e NumPy.
-Não utiliza scikit-learn nem pandas.
-
-Arquivos esperados na mesma pasta deste script:
-    phpkIxskf.arff  -> Bank Marketing (classificação)
-    dataset.arff    -> Brazilian Houses to Rent (regressão)
-
-Observação sobre desempenho:
-A validação cruzada é computacionalmente cara para kNN. Por padrão, o script
-usa uma amostra aleatória de até 4.000 linhas para classificação e 3.000 para
-regressão. Os arquivos originais continuam tendo mais de 1.000 instâncias.
-Altere os limites abaixo para avaliar mais dados, considerando o tempo de execução.
-"""
-
 import csv
 import math
 import time
@@ -24,9 +6,6 @@ from pathlib import Path
 import numpy as np  
 
 
-# ---------------------------------------------------------------------------
-# Configurações
-# ---------------------------------------------------------------------------
 
 BASE_DIR = Path(__file__).resolve().parent
 CLASSIFICATION_FILE = BASE_DIR / "phpkIxskf.arff"
@@ -35,18 +14,12 @@ REGRESSION_FILE = BASE_DIR / "dataset.arff"
 N_FOLDS = 5
 RANDOM_SEED = 42
 K_NEIGHBORS = 5
-MAX_CLASSIFICATION_ROWS = None  # utiliza todos os registros do arquivo
-MAX_REGRESSION_ROWS = None  # utiliza todos os registros do arquivo
+MAX_CLASSIFICATION_ROWS = None  
+MAX_REGRESSION_ROWS = None 
 KNN_BATCH_SIZE = 64
 EPSILON = 1e-6
 
-
-# ---------------------------------------------------------------------------
-# Leitura de arquivos ARFF
-# ---------------------------------------------------------------------------
-
 def split_arff_csv(line):
-    """Divide uma linha CSV de ARFF respeitando valores entre aspas simples."""
     return next(csv.reader([line], delimiter=",", quotechar="'", skipinitialspace=True))
 
 
@@ -55,7 +28,6 @@ def clean_value(value):
 
 
 def parse_arff(file_path):
-    """Lê atributos e linhas de um arquivo ARFF sem bibliotecas externas."""
     attributes = []
     attribute_types = []
     rows = []
@@ -72,7 +44,6 @@ def parse_arff(file_path):
                 continue
 
             if lower.startswith("@attribute"):
-                # Divide em até três partes para preservar nomes/definições.
                 parts = line.split(None, 2)
                 if len(parts) < 3:
                     continue
@@ -107,12 +78,6 @@ def parse_arff(file_path):
 
 
 def encode_dataset(file_path, max_rows=None, seed=RANDOM_SEED, drop_features=None):
-    """
-    Converte os atributos preditores para números.
-    Variáveis nominais são codificadas em one-hot (sem impor ordem artificial).
-    Valores ausentes '?' são imputados pela média (numéricos) ou moda (nominais).
-    A última coluna é a variável-alvo.
-    """
     names, types, rows = parse_arff(file_path)
     rng = np.random.default_rng(seed)
 
@@ -147,7 +112,6 @@ def encode_dataset(file_path, max_rows=None, seed=RANDOM_SEED, drop_features=Non
             if not category_list:
                 category_list = ["unknown"]
 
-            # Imputação pela moda para categorias ausentes.
             if valid:
                 values, counts = np.unique(np.asarray(valid, dtype=str), return_counts=True)
                 mode_value = values[np.argmax(counts)]
@@ -188,13 +152,10 @@ def encode_dataset(file_path, max_rows=None, seed=RANDOM_SEED, drop_features=Non
         task = "regression"
         target_classes = None
 
-    # Escalonamento feito dentro de cada fold, sem usar dados de teste.
     return X, y, target_name, expanded_feature_names, task, target_classes, len(names), len(parse_arff(file_path)[2])
 
 
-# ---------------------------------------------------------------------------
 # Pré-processamento e validação cruzada
-# ---------------------------------------------------------------------------
 
 def standardize_train_test(X_train, X_test):
     mean = np.mean(X_train, axis=0)
@@ -204,7 +165,6 @@ def standardize_train_test(X_train, X_test):
 
 
 def make_folds(n_samples, n_folds=N_FOLDS, seed=RANDOM_SEED):
-    """Gera índices de validação cruzada k-fold embaralhados manualmente."""
     if n_samples < n_folds:
         raise ValueError("O número de amostras deve ser maior ou igual ao número de folds.")
     rng = np.random.default_rng(seed)
@@ -221,12 +181,8 @@ def cross_validation_splits(n_samples, n_folds=N_FOLDS, seed=RANDOM_SEED):
         yield all_indices[mask], test_indices
 
 
-# ---------------------------------------------------------------------------
 # Métricas de classificação
-# ---------------------------------------------------------------------------
-
 def confusion_matrix_binary(y_true, y_pred, positive_label=1):
-    """Matriz 2x2 na ordem [[VN, FP], [FN, VP]], para rótulos binários."""
     y_true = np.asarray(y_true)
     y_pred = np.asarray(y_pred)
     negative_label = 0 if positive_label != 0 else 1
@@ -257,10 +213,7 @@ def classification_metrics(y_true, y_pred, positive_label=1):
     }
 
 
-# ---------------------------------------------------------------------------
 # Métricas de regressão
-# ---------------------------------------------------------------------------
-
 def regression_metrics(y_true, y_pred, n_features):
     y_true = np.asarray(y_true, dtype=float)
     y_pred = np.asarray(y_pred, dtype=float)
@@ -286,10 +239,7 @@ def regression_metrics(y_true, y_pred, n_features):
     }
 
 
-# ---------------------------------------------------------------------------
 # kNN — classificação e regressão
-# ---------------------------------------------------------------------------
-
 class KNN:
     def __init__(self, k=5, task="classification", distance="euclidean"):
         if task not in ("classification", "regression"):
@@ -308,16 +258,13 @@ class KNN:
         return self
 
     def _distances(self, X_batch):
-        # X_batch: (n_lote, n_atributos); X_train: (n_treino, n_atributos)
         if self.distance == "euclidean":
-            # Identidade: ||a-b||² = ||a||² + ||b||² - 2a.b
             batch_sq = np.sum(X_batch ** 2, axis=1, keepdims=True)
             train_sq = np.sum(self.X_train ** 2, axis=1)[None, :]
             squared = batch_sq + train_sq - 2.0 * (X_batch @ self.X_train.T)
             np.maximum(squared, 0.0, out=squared)
             return np.sqrt(squared)
 
-        # Manhattan, acumulada atributo a atributo para limitar a memória usada.
         distances = np.zeros((len(X_batch), len(self.X_train)), dtype=float)
         for j in range(self.X_train.shape[1]):
             distances += np.abs(X_batch[:, j, None] - self.X_train[None, :, j])
@@ -345,10 +292,7 @@ class KNN:
         return np.asarray(predictions, dtype=dtype)
 
 
-# ---------------------------------------------------------------------------
-# Regressão Linear Múltipla — solução por pseudoinversa
-# ---------------------------------------------------------------------------
-
+# Regressão Linear Múltipla - solução por pseudoinversa
 class MultipleLinearRegression:
     def __init__(self):
         self.coefficients = None
@@ -366,17 +310,8 @@ class MultipleLinearRegression:
         return design @ self.coefficients
 
 
-# ---------------------------------------------------------------------------
 # Classificador Bayesiano Gaussiano univariado (Naive Bayes)
-# ---------------------------------------------------------------------------
-
 class NaiveBayes:
-    """
-    Naive Bayes Gaussiano univariado, seguindo a lógica do arquivo nb_gaussiano.py:
-    calcula, para cada classe, média, variância e probabilidade a priori.
-    Na predição, combina as densidades normais de cada atributo usando logaritmos.
-    """
-
     def __init__(self, variance_smoothing=1e-6):
         self.variance_smoothing = variance_smoothing
         self._classes = None
@@ -401,7 +336,6 @@ class NaiveBayes:
             self._var[idx, :] = X_c.var(axis=0)
             self._prior[idx] = X_c.shape[0] / float(n_samples)
 
-        # Evita variância zero, que causaria divisão por zero na distribuição normal.
         global_var = np.var(X_train, axis=0)
         floor = self.variance_smoothing * np.maximum(global_var, 1.0)
         self._var = np.maximum(self._var, floor)
@@ -415,9 +349,6 @@ class NaiveBayes:
             variance = np.maximum(self._var[idx], EPSILON)
             difference = X_test - self._mean[idx]
 
-            # Densidade normal univariada por atributo:
-            # p(x_j|C) = 1/sqrt(2*pi*var) * exp(-(x_j-mu)^2/(2*var))
-            # Naive Bayes assume independência condicional entre os atributos.
             log_density = -0.5 * np.sum(
                 np.log(2.0 * np.pi * variance)
                 + (difference ** 2) / variance,
@@ -430,10 +361,7 @@ class NaiveBayes:
         return self._classes[best_indices]
 
 
-# ---------------------------------------------------------------------------
 # Classificador Bayesiano Gaussiano multivariado
-# ---------------------------------------------------------------------------
-
 class GaussianMultivariateBayes:
     def __init__(self, regularization=1e-4):
         self.regularization = regularization
@@ -490,10 +418,7 @@ class GaussianMultivariateBayes:
         return self.classes[np.argmax(np.column_stack(log_probabilities), axis=1)]
 
 
-# ---------------------------------------------------------------------------
 # Execução e agregação dos experimentos
-# ---------------------------------------------------------------------------
-
 def summarize_results(model_name, fold_results, task):
     keys = [key for key in fold_results[0] if key != "Matriz de confusão"]
     summary = {"Algoritmo": model_name}
@@ -519,7 +444,6 @@ def evaluate_model_cv(model_name, model_factory, X, y, task, n_folds=N_FOLDS, se
         X_train, X_test = X[train_idx], X[test_idx]
         y_train, y_test = y[train_idx], y[test_idx]
 
-        # Escala estimada apenas no conjunto de treino para evitar vazamento.
         X_train_scaled, X_test_scaled = standardize_train_test(X_train, X_test)
 
         model = model_factory()
@@ -585,7 +509,6 @@ def print_summary_table(summaries, task):
 
 
 def save_summary_csv(summaries, task, output_path):
-    """Salva uma tabela CSV com médias e desvios, usando apenas a biblioteca padrão."""
     if task == "classification":
         columns = ["Acurácia", "Precisão", "Recall", "F1-score", "Tempo treino (s)", "Tempo teste (s)"]
     else:
@@ -617,7 +540,6 @@ def run_classification_experiment():
     print(f"Distribuição das classes na amostra: {dict(zip(*np.unique(y, return_counts=True)))}")
     print(f"Validação cruzada: {N_FOLDS}-fold")
 
-    # A classe "2" é a segunda categoria no ARFF e será tratada como positiva.
     models = [
         ("kNN — Euclidiana", lambda: KNN(K_NEIGHBORS, "classification", "euclidean")),
         ("kNN — Manhattan", lambda: KNN(K_NEIGHBORS, "classification", "manhattan")),
@@ -675,11 +597,9 @@ def run_regression_experiment():
 
 def main():
     print("PROJETO DE INTELIGÊNCIA ARTIFICIAL COMPUTACIONAL — UNIFOR")
-    print("Algoritmos implementados manualmente com NumPy; sem scikit-learn/pandas.")
     run_classification_experiment()
     run_regression_experiment()
     print("\nExperimentos concluídos.")
-    print("Use as tabelas geradas para discutir desempenho, tempo e limitações nos slides.")
 
 
 if __name__ == "__main__":
