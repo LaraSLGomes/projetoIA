@@ -596,7 +596,7 @@ def run_regression_experiment():
 
 
 def main():
-    print("PROJETO DE INTELIGÊNCIA ARTIFICIAL COMPUTACIONAL — UNIFOR")
+    print("PROJETO DE INTELIGÊNCIA ARTIFICIAL COMPUTACIONAL")
     run_classification_experiment()
     run_regression_experiment()
     print("\nExperimentos concluídos.")
